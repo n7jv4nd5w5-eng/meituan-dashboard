@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多源数据导入 · 花作</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f0f4fa; --card:#ffffff; --ink:#1a2233; --sub:#6b7a99;
+  --primary:#2563eb; --primary-soft:#eaf1ff;
+  --cyan:#06b6d4; --green:#10b981; --red:#f43f5e; --amber:#f59e0b;
+  --border:#e3e9f2; --shadow:0 2px 12px rgba(30,60,120,.06);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:1180px;margin:0 auto;padding:20px 24px 60px}
+
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+.logo{width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#2563eb,#06b6d4);
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:20px}
+h1{font-size:22px;font-weight:700}
+.sub{color:var(--sub);font-size:13px}
+.spacer{flex:1}
+.btn{border:none;cursor:pointer;font-size:13px;padding:9px 18px;border-radius:10px;font-weight:600;transition:.15s;text-decoration:none;display:inline-block}
+.btn-primary{background:linear-gradient(135deg,#2563eb,#06b6d4);color:#fff}
+.btn-primary:hover{filter:brightness(1.08)}
+.btn-ghost{background:#fff;color:var(--primary);border:1px solid var(--border)}
+.btn-ghost:hover{border-color:var(--primary)}
+.btn-danger{background:#fff;color:var(--red);border:1px solid #fbd0d8}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+
+.panel{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:18px 20px;margin-bottom:14px}
+.panel h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.panel h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--primary)}
+.hint{font-size:12px;color:var(--sub);line-height:1.7}
+
+.drop{border:2px dashed var(--border);border-radius:14px;padding:34px 20px;text-align:center;cursor:pointer;transition:.15s;background:#fbfdff}
+.drop:hover,.drop.over{border-color:var(--primary);background:var(--primary-soft)}
+.drop .big{font-size:15px;font-weight:700;margin-bottom:6px}
+.drop .small{font-size:12px;color:var(--sub)}
+
+.fitem{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.fitem .fhead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.fname{font-weight:700;font-size:13px}
+.fmeta{font-size:12px;color:var(--sub)}
+.fitem select,.fitem input[type=number]{padding:5px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:#fff}
+.fitem label{font-size:12px;color:var(--sub)}
+.fdel{margin-left:auto;border:none;background:none;color:var(--red);cursor:pointer;font-size:12px;font-weight:600}
+.fwarn{font-size:12px;color:var(--amber);margin-top:6px}
+.fok{font-size:12px;color:var(--green);margin-top:6px;font-weight:600}
+
+.ctl{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.ctl input[type=text]{padding:9px 12px;border:1px solid var(--border);border-radius:10px;font-size:13px;width:280px}
+.ctl label{font-size:12px;color:var(--sub)}
+
+.stat{display:inline-block;background:var(--primary-soft);color:var(--primary);font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;margin:0 8px 8px 0}
+.stat.warn{background:#fef3c7;color:#b45309}
+
+.tbl-wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:12px}
+table{border-collapse:collapse;font-size:12px;min-width:100%}
+th{background:#f5f8fd;color:var(--sub);font-weight:600;padding:7px 10px;text-align:left;white-space:nowrap;position:sticky;top:0}
+td{padding:6px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+tr:hover td{background:#f8faff}
+
+.saved{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:12px 14px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
+  padding:10px 22px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.3s;z-index:99}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">花</div>
+    <div>
+      <h1>多源数据导入</h1>
+      <div class="sub">上传多个来源的 Excel，按门店名自动合并成看板数据</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="btn btn-ghost" href="index.html">← 返回数据看板</a>
+  </header>
+
+  <div class="panel" id="savedPanel" style="display:none">
+    <div class="saved">
+      <span id="savedInfo"></span>
+      <div class="spacer"></div>
+      <a class="btn btn-primary" href="index.html">查看看板</a>
+      <button class="btn btn-danger" onclick="clearSaved()">清除本地数据</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3><span class="dot"></span>第 1 步 · 添加源数据文件（可多选 / 可拖拽）</h3>
+    <div class="drop" id="drop">
+      <div class="big">点击选择或拖入 Excel / CSV 文件</div>
+      <div class="small">支持 .xlsx / .xls / .csv，可一次选多个；每个文件读取第一个工作表</div>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple style="position:absolute;left:-9999px;top:0">
+    <div class="hint" style="margin-top:10px">
+      合并规则：以「门店名」为键做并集合并；<b>后添加的文件覆盖同名指标列</b>（仅覆盖非空值）；不同名的列会全部保留并展示在看板明细中。
+      如果某文件没有「分店名」列，可在下方手动选择门店列；表头不在第一行时可调整表头行号。
+    </div>
+    <div id="fileList" style="margin-top:12px"></div>
+  </div>
+
+  <div class="panel">
+    <h3><span class="dot" style="background:var(--cyan)"></span>第 2 步 · 合并预览</h3>
+    <div id="mergeInfo"><span class="hint">尚未添加文件</span></div>
+    <div class="tbl-wrap" id="previewWrap" style="display:none;margin-top:10px"><table id="previewTbl"></table></div>
+  </div>
+
+  <div class="panel">
+    <h3><span class="dot" style="background:var(--green)"></span>第 3 步 · 应用到看板</h3>
+    <div class="ctl">
+      <label>数据周期</label>
+      <input type="text" id="periodInput" placeholder="如：2026-09-01 ~ 2026-09-16">
+    </div>
+    <div class="ctl" style="margin-top:12px">
+      <button class="btn btn-primary" id="btnSave" onclick="applyData()" disabled>保存到浏览器并查看看板</button>
+      <button class="btn btn-ghost" id="btnDl" onclick="downloadJson()" disabled>下载 data.json（用于更新网站）</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      「保存到浏览器」立即生效，但只存在本机浏览器；要让网页长期更新，请下载 data.json 并替换 GitHub 仓库里的同名文件。
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const LS_KEY = 'meituanDashboardData';
+const KEY_CANDIDATES = ['分店名','门店名称','门店名','门店','店名','店铺名称','店铺','商户名称'];
+const norm = s => String(s ?? '').trim().replace(/\s+/g,'');
+const $ = id => document.getElementById(id);
+let files = [];   // {id,name,aoa,headerRow,keyCol,headers,rows,error}
+let merged = null; // {columns, rows, stats}
+let seq = 0;
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
+
+/* ---------- file intake ---------- */
+$('drop').addEventListener('click', ()=>$('fileInput').click());
+$('drop').addEventListener('dragover', e=>{e.preventDefault();$('drop').classList.add('over');});
+$('drop').addEventListener('dragleave', ()=>$('drop').classList.remove('over'));
+$('drop').addEventListener('drop', e=>{e.preventDefault();$('drop').classList.remove('over');readFiles(e.dataTransfer.files);});
+$('fileInput').addEventListener('change', e=>{readFiles(e.target.files); e.target.value='';});
+
+function readFiles(fileList){
+  [...fileList].forEach(f=>{
+    const fr = new FileReader();
+    fr.onload = ev => {
+      try{
+        const wb = XLSX.read(new Uint8Array(ev.target.result), {type:'array'});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:null});
+        const entry = {id:++seq, name:f.name, aoa, headerRow:1, keyCol:null, headers:[], rows:[], error:null};
+        parseEntry(entry);
+        files.push(entry);
+        renderFiles(); mergeAll();
+      }catch(err){ toast('读取失败：' + f.name + '（' + err.message + '）'); }
+    };
+    fr.readAsArrayBuffer(f);
+  });
+}
+
+function parseEntry(entry){
+  entry.error = null; entry.headers = []; entry.rows = []; entry.keyCol = null;
+  const hi = entry.headerRow - 1;
+  if(!entry.aoa.length || hi >= entry.aoa.length){ entry.error = '文件为空或表头行超出范围'; return; }
+  const headers = entry.aoa[hi].map(h => h == null ? '' : String(h).trim());
+  if(!headers.some(h=>h)){ entry.error = '表头行为空，请调整表头行号'; return; }
+  entry.headers = headers;
+  for(let i = hi+1; i < entry.aoa.length; i++){
+    const arr = entry.aoa[i];
+    if(!arr || arr.every(v => v == null || v === '')) continue;
+    const obj = {};
+    headers.forEach((h,j)=>{ if(h) obj[h] = arr[j] ?? null; });
+    entry.rows.push(obj);
+  }
+  entry.keyCol = KEY_CANDIDATES.find(c => headers.includes(c)) || null;
+  if(!entry.keyCol) entry.error = '未自动识别门店列，请手动选择';
+}
+
+function renderFiles(){
+  $('fileList').innerHTML = files.map(f=>{
+    if(f.error && !f.headers.length) return `<div class="fitem"><div class="fhead">
+      <span class="fname">${f.name}</span><span class="fmeta">解析失败</span>
+      <button class="fdel" onclick="removeFile(${f.id})">删除</button></div>
+      <div class="fwarn">${f.error}</div></div>`;
+    const keyOpts = f.headers.map(h=>`<option value="${h}" ${h===f.keyCol?'selected':''}>${h}</option>`).join('');
+    return `<div class="fitem">
+      <div class="fhead">
+        <span class="fname">${f.name}</span>
+        <span class="fmeta">${f.rows.length} 行 × ${f.headers.length} 列</span>
+        <label>门店列</label><select onchange="setKeyCol(${f.id},this.value)">${keyOpts}</select>
+        <label>表头行</label><input type="number" min="1" max="20" value="${f.headerRow}" style="width:56px" onchange="setHeaderRow(${f.id},this.value)">
+        <button class="fdel" onclick="removeFile(${f.id})">删除</button>
+      </div>
+      ${f.error ? `<div class="fwarn">${f.error}</div>` : `<div class="fok">✓ 已就绪</div>`}
+    </div>`;
+  }).join('');
+}
+function setKeyCol(id, v){ const f=files.find(x=>x.id===id); if(f){f.keyCol=v; f.error = v?null:'请选择门店列'; renderFiles(); mergeAll();} }
+function setHeaderRow(id, v){ const f=files.find(x=>x.id===id); if(f){f.headerRow=Math.max(1,+v||1); parseEntry(f); renderFiles(); mergeAll();} }
+function removeFile(id){ files = files.filter(x=>x.id!==id); renderFiles(); mergeAll(); }
+
+/* ---------- merge ---------- */
+function mergeAll(){
+  merged = null;
+  const ok = files.filter(f=>!f.error && f.keyCol);
+  if(!ok.length){
+    $('mergeInfo').innerHTML = '<span class="hint">尚未添加可用文件</span>';
+    $('previewWrap').style.display='none';
+    $('btnSave').disabled = true; $('btnDl').disabled = true;
+    return;
+  }
+  const storeMap = new Map();  // normKey -> {row, sources:Set}
+  const columns = ['分店名'];
+  let overwritten = 0;
+  ok.forEach((f, fi)=>{
+    f.rows.forEach(r=>{
+      const key = norm(r[f.keyCol]);
+      if(!key) return;
+      let rec = storeMap.get(key);
+      if(!rec){ rec = {row:{分店名:String(r[f.keyCol]).trim()}, sources:new Set()}; storeMap.set(key, rec); }
+      rec.sources.add(fi);
+      for(const h of f.headers){
+        if(!h || h === f.keyCol) continue;
+        const v = r[h];
+        if(v == null || v === '') continue;
+        if(!columns.includes(h)) columns.push(h);
+        if(rec.row[h] != null && rec.row[h] !== '' && rec.row[h] !== v) overwritten++;
+        rec.row[h] = v;
+      }
+    });
+  });
+  const rows = [...storeMap.values()].map(x=>x.row);
+  const singleSource = [...storeMap.entries()].filter(([,rec])=>rec.sources.size===1 && ok.length>1);
+  merged = {columns, rows};
+
+  let info = `<span class="stat">合并后 ${rows.length} 家门店</span><span class="stat">${columns.length} 个指标列</span>`;
+  if(overwritten) info += `<span class="stat">覆盖更新 ${overwritten} 个字段值</span>`;
+  if(singleSource.length && ok.length>1){
+    const names = singleSource.slice(0,12).map(([k,rec])=>rec.row['分店名']).join('、');
+    info += `<div class="hint" style="margin-top:4px;color:var(--amber)">以下 ${singleSource.length} 家门店只出现在单个文件中，如与其他文件是同一家店，请统一门店名后重新上传：${names}${singleSource.length>12?' …':''}</div>`;
+  }
+  $('mergeInfo').innerHTML = info;
+
+  const maxRows = 50;
+  const cell = v => v == null ? '' : (typeof v === 'number' ? (+v.toFixed(4)).toLocaleString() : String(v));
+  $('previewTbl').innerHTML =
+    '<thead><tr>' + columns.map(c=>`<th>${c}</th>`).join('') + '</tr></thead>' +
+    '<tbody>' + rows.slice(0,maxRows).map(r=>'<tr>'+columns.map(c=>`<td>${cell(r[c])}</td>`).join('')+'</tr>').join('') + '</tbody>';
+  $('previewWrap').style.display='block';
+  $('btnSave').disabled = false; $('btnDl').disabled = false;
+}
+
+/* ---------- apply / export ---------- */
+function buildPayload(){
+  const period = $('periodInput').value.trim() || files.map(f=>f.name.replace(/\.(xlsx|xls|csv)$/i,'')).join(' + ');
+  return {period, columns: merged.columns, rows: merged.rows, importedAt: new Date().toISOString(), sources: files.map(f=>f.name)};
+}
+
+function applyData(){
+  if(!merged) return;
+  try{
+    localStorage.setItem(LS_KEY, JSON.stringify(buildPayload()));
+    toast('已保存到浏览器，正在打开看板…');
+    setTimeout(()=>location.href='index.html', 600);
+  }catch(e){ toast('保存失败：' + e.message); }
+}
+
+function downloadJson(){
+  if(!merged) return;
+  const blob = new Blob([JSON.stringify(buildPayload())], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'data.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('已下载 data.json，请替换仓库中的同名文件');
+}
+
+/* ---------- saved state ---------- */
+function showSaved(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return;
+    const d = JSON.parse(raw);
+    if(!d || !d.rows) return;
+    const when = d.importedAt ? new Date(d.importedAt).toLocaleString('zh-CN') : '未知时间';
+    $('savedInfo').innerHTML = `本机已有导入数据：<b>${d.period || ''}</b> · ${d.rows.length} 家门店 · 导入于 ${when}` +
+      (d.sources ? `<div class="hint" style="margin-top:4px">来源：${d.sources.join('、')}</div>` : '');
+    $('savedPanel').style.display = 'block';
+  }catch(e){}
+}
+function clearSaved(){
+  localStorage.removeItem(LS_KEY);
+  $('savedPanel').style.display = 'none';
+  toast('已清除，看板将恢复使用 data.json');
+}
+showSaved();
+</script>
+</body>
+</html>
