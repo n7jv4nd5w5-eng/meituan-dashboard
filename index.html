@@ -88,9 +88,41 @@ tr:hover td{background:#f8faff}
   padding:10px 22px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.3s;z-index:99}
 .toast.show{opacity:1}
 #emptyHint{display:none;text-align:center;color:var(--sub);padding:60px 0;font-size:14px}
+
+/* password gate */
+#gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1e293b,#0f172a);padding:20px}
+#gate.hidden{display:none}
+.gate-card{background:var(--card);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.35);
+  padding:36px 32px;width:100%;max-width:360px;text-align:center}
+.gate-logo{width:56px;height:56px;border-radius:16px;margin:0 auto 16px;
+  background:linear-gradient(135deg,#2563eb,#06b6d4);display:flex;align-items:center;
+  justify-content:center;color:#fff;font-weight:700;font-size:26px}
+.gate-card h2{font-size:18px;font-weight:700;margin-bottom:6px}
+.gate-card p{font-size:12.5px;color:var(--sub);margin-bottom:22px;line-height:1.5}
+.gate-card input{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;
+  font-size:15px;text-align:center;letter-spacing:2px;margin-bottom:12px}
+.gate-card input:focus{outline:none;border-color:var(--primary)}
+.gate-card button{width:100%;padding:12px;border:none;border-radius:12px;cursor:pointer;
+  font-size:14px;font-weight:700;color:#fff;background:linear-gradient(135deg,#2563eb,#06b6d4)}
+.gate-card button:hover{filter:brightness(1.08)}
+.gate-err{color:var(--red);font-size:12px;margin-top:10px;min-height:16px}
+.gate-card.shake{animation:gateShake .4s}
+@keyframes gateShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}
+  40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
 </style>
 </head>
 <body>
+<div id="gate">
+  <div class="gate-card" id="gateCard">
+    <div class="gate-logo">花</div>
+    <h2>美团经营数据看板</h2>
+    <p>此页面仅限内部访问，请输入访问密码</p>
+    <input type="password" id="gatePass" placeholder="访问密码" autocomplete="current-password">
+    <button id="gateBtn" onclick="gateSubmit()">进入看板</button>
+    <div class="gate-err" id="gateErr"></div>
+  </div>
+</div>
 <div class="wrap">
   <header>
     <div class="logo">花</div>
@@ -384,7 +416,40 @@ function renderDiag(){
 ['fRegion','fCity','fType'].forEach(id=>$(id).addEventListener('change',refresh));
 $('storeSearch').addEventListener('input',refresh);
 window.addEventListener('resize',()=>Object.values(charts).forEach(c=>c.resize()));
-init();
+
+/* ---------- password gate ---------- */
+const GATE_HASH = 'f3cb37359464037caf27b804af2dea4e2dea7b93b0aeee23592cfe8526879c27';
+const AUTH_KEY = 'mtDashboardAuth';
+async function sha256(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function gateUnlock(){
+  $('gate').classList.add('hidden');
+  init();
+}
+async function gateSubmit(){
+  const pass = $('gatePass').value;
+  const err = $('gateErr');
+  if(!pass){ err.textContent='请输入密码'; return; }
+  const h = await sha256(pass);
+  if(h === GATE_HASH){
+    localStorage.setItem(AUTH_KEY,'1');
+    err.textContent='';
+    gateUnlock();
+  }else{
+    err.textContent='密码错误，请重试';
+    const card=$('gateCard');
+    card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+    $('gatePass').value=''; $('gatePass').focus();
+  }
+}
+(function(){
+  if(localStorage.getItem(AUTH_KEY)==='1'){ gateUnlock(); return; }
+  const inp=$('gatePass');
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') gateSubmit(); });
+  inp.focus();
+})();
 </script>
 </body>
 </html>
