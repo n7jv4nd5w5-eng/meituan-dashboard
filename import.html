@@ -72,9 +72,41 @@ tr:hover td{background:#f8faff}
 .toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;
   padding:10px 22px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:.3s;z-index:99}
 .toast.show{opacity:1}
+
+/* password gate */
+#gate{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1e293b,#0f172a);padding:20px}
+#gate.hidden{display:none}
+.gate-card{background:var(--card);border-radius:20px;box-shadow:0 20px 60px rgba(0,0,0,.35);
+  padding:36px 32px;width:100%;max-width:360px;text-align:center}
+.gate-logo{width:56px;height:56px;border-radius:16px;margin:0 auto 16px;
+  background:linear-gradient(135deg,#2563eb,#06b6d4);display:flex;align-items:center;
+  justify-content:center;color:#fff;font-weight:700;font-size:26px}
+.gate-card h2{font-size:18px;font-weight:700;margin-bottom:6px}
+.gate-card p{font-size:12.5px;color:var(--sub);margin-bottom:22px;line-height:1.5}
+.gate-card input{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;
+  font-size:15px;text-align:center;letter-spacing:2px;margin-bottom:12px}
+.gate-card input:focus{outline:none;border-color:var(--primary)}
+.gate-card button{width:100%;padding:12px;border:none;border-radius:12px;cursor:pointer;
+  font-size:14px;font-weight:700;color:#fff;background:linear-gradient(135deg,#2563eb,#06b6d4)}
+.gate-card button:hover{filter:brightness(1.08)}
+.gate-err{color:var(--red);font-size:12px;margin-top:10px;min-height:16px}
+.gate-card.shake{animation:gateShake .4s}
+@keyframes gateShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}
+  40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}
 </style>
 </head>
 <body>
+<div id="gate">
+  <div class="gate-card" id="gateCard">
+    <div class="gate-logo">花</div>
+    <h2>数据导入</h2>
+    <p>此页面仅限内部访问，请输入访问密码</p>
+    <input type="password" id="gatePass" placeholder="访问密码" autocomplete="current-password">
+    <button id="gateBtn" onclick="gateSubmit()">进入</button>
+    <div class="gate-err" id="gateErr"></div>
+  </div>
+</div>
 <div class="wrap">
   <header>
     <div class="logo">花</div>
@@ -136,7 +168,7 @@ tr:hover td{background:#f8faff}
 
 <script>
 const LS_KEY = 'meituanDashboardData';
-const KEY_CANDIDATES = ['分店名','门店名称','门店名','门店','店名','店铺名称','店铺','商户名称'];
+const KEY_CANDIDATES = ['分店名','门店名称','门店名','门店','店名','店铺名称','店铺','商户名称','推广门店','评价门店'];
 const $ = id => document.getElementById(id);
 let files = [];      // {id,name,aoa,headerRow,keyCol,headers,rows,error}
 let rawMerge = null; // 门店聚合后、列映射前
@@ -224,8 +256,41 @@ function parseEntry(entry){
     headers.forEach((h,j)=>{ if(h) obj[h] = arr[j] ?? null; });
     entry.rows.push(obj);
   }
+  transformEntry(entry);
   entry.keyCol = KEY_CANDIDATES.find(c => headers.includes(c)) || null;
   if(!entry.keyCol) entry.error = '未自动识别门店列，请手动选择';
+}
+
+/* 评价/推广源文件 → 看板口径列 的行转换 */
+function transformEntry(entry){
+  const H = entry.headers, R = entry.rows, name = entry.name || '';
+  const starNum = v => { const m = String(v==null?'':v).match(/[\d.]+/); return m ? parseFloat(m[0]) : null; };
+  if(H.includes('星级') && (H.includes('评价正文字数') || H.includes('图片数'))){
+    const prefix = /点评/.test(name) ? '点评' : (/美团/.test(name) ? '美团' : null);
+    const keySrc = H.includes('评价门店') ? '评价门店' : (KEY_CANDIDATES.find(c=>H.includes(c)) || null);
+    if(prefix && keySrc){
+      const cGood = prefix+'-有效好评', cEx = prefix+'-优秀好评', cBad = prefix+'-中差评';
+      entry.rows = R.map(r=>{
+        const star = starNum(r['星级']), words = num(r['评价正文字数'])||0, pics = num(r['图片数'])||0;
+        const o = {}; o[keySrc] = r[keySrc];
+        o[cGood] = (star!=null && star>=5 && words>=15 && pics>=3) ? 1 : 0;
+        o[cEx]  = (star!=null && star>=5 && words>=150 && pics>=6) ? 1 : 0;
+        o[cBad] = (star!=null && star<=3) ? 1 : 0;
+        return o;
+      }).filter(o => o[keySrc]!=null && o[keySrc]!=='');
+      entry.headers = [keySrc, cGood, cEx, cBad];
+      return;
+    }
+  }
+  if(H.includes('推广门店') && (H.includes('花费（元）') || H.includes('现金花费（元）'))){
+    entry.rows = R.map(r=>({
+      '推广门店': r['推广门店'],
+      '推广花费': num(r['花费（元）']) ?? num(r['现金花费（元）']) ?? 0,
+      '推广订单量': (num(r['团购订单量（个）'])||0) + (num(r['下单券数（张）'])||0)
+    })).filter(o => o['推广门店']!=null && o['推广门店']!=='');
+    entry.headers = ['推广门店','推广花费','推广订单量'];
+    return;
+  }
 }
 
 function renderFiles(){
@@ -387,9 +452,12 @@ function derive(o){
   }
   if(F(o['曝光人数'])>0) put('曝访转化率', F(o['访问人数'])/F(o['曝光人数']));
   if(F(o['访问人数'])>0) put('访购率', F(o['下单人数'])/F(o['访问人数']));
-  if(F(o['数据部新客数'])>0 && F(o['推广花费'])>0) put('获客成本', F(o['推广花费'])/F(o['数据部新客数']));
+  if(F(o['推广花费'])>0 && F(o['推广订单量'])>0) put('获客成本', F(o['推广花费'])/F(o['推广订单量']));
+  else if(F(o['数据部新客数'])>0 && F(o['推广花费'])>0) put('获客成本', F(o['推广花费'])/F(o['数据部新客数']));
   if(o['有效好评总数']==null && (o['点评-有效好评']!=null || o['美团-有效好评']!=null))
     o['有效好评总数'] = F(o['点评-有效好评'])+F(o['美团-有效好评']);
+  if(o['优秀好评总数']==null && (o['点评-优秀好评']!=null || o['美团-优秀好评']!=null))
+    o['优秀好评总数'] = F(o['点评-优秀好评'])+F(o['美团-优秀好评']);
 }
 
 function renderPreview(){
@@ -444,6 +512,36 @@ function clearSaved(){
   toast('已清除，看板将恢复使用 data.json');
 }
 showSaved();
+
+/* ---------- password gate ---------- */
+const GATE_HASH = 'f3cb37359464037caf27b804af2dea4e2dea7b93b0aeee23592cfe8526879c27';
+const AUTH_KEY = 'mtDashboardAuth';
+async function sha256(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function gateSubmit(){
+  const pass = $('gatePass').value;
+  const err = $('gateErr');
+  if(!pass){ err.textContent='请输入密码'; return; }
+  const h = await sha256(pass);
+  if(h === GATE_HASH){
+    localStorage.setItem(AUTH_KEY,'1');
+    err.textContent='';
+    $('gate').classList.add('hidden');
+  }else{
+    err.textContent='密码错误，请重试';
+    const card=$('gateCard');
+    card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+    $('gatePass').value=''; $('gatePass').focus();
+  }
+}
+(function(){
+  if(localStorage.getItem(AUTH_KEY)==='1'){ $('gate').classList.add('hidden'); return; }
+  const inp=$('gatePass');
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter') gateSubmit(); });
+  inp.focus();
+})();
 </script>
 </body>
 </html>
