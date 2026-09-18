@@ -325,6 +325,9 @@ function mergeAll(){
   if(aggregated) info += `<span class="stat">明细行已聚合 ${aggregated} 行</span>`;
   if(single.length) info += `<div class="hint" style="margin-top:4px;color:var(--amber)">以下 ${single.length} 家门店只出现在单个文件中，如与其他文件是同一家店，请统一门店名后重新上传：` +
     single.slice(0,10).map(r=>r['分店名']).join('、') + (single.length>10?' …':'') + '</div>';
+  const refundBad = merged.rows.filter(r => F(r['退款券数'])>0 && F(r['退款券数'])>F(r['下单券数']));
+  if(refundBad.length) info += `<div class="hint" style="margin-top:4px;color:var(--red)">⚠ 以下 ${refundBad.length} 家门店「退款券数」大于「下单券数」，源文件疑似串列（如退款券数被错填成金额×100），已照常求和，请核对源数据：` +
+    refundBad.slice(0,8).map(r=>`${r['分店名']}（退${F(r['退款券数'])}>下${F(r['下单券数'])}）`).join('、') + (refundBad.length>8?' …':'') + '</div>';
   $('mergeInfo').innerHTML = info;
 }
 
