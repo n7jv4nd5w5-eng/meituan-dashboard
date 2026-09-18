@@ -270,15 +270,19 @@ function transformEntry(entry){
     const keySrc = H.includes('评价门店') ? '评价门店' : (KEY_CANDIDATES.find(c=>H.includes(c)) || null);
     if(prefix && keySrc){
       const cGood = prefix+'-有效好评', cEx = prefix+'-优秀好评', cBad = prefix+'-中差评';
+      const cSum = prefix+'-星级合计', cN = prefix+'-星级条数';
       entry.rows = R.map(r=>{
         const star = starNum(r['星级']), words = num(r['评价正文字数'])||0, pics = num(r['图片数'])||0;
         const o = {}; o[keySrc] = r[keySrc];
         o[cGood] = (star!=null && star>=5 && words>=15 && pics>=3) ? 1 : 0;
         o[cEx]  = (star!=null && star>=5 && words>=150 && pics>=6) ? 1 : 0;
         o[cBad] = (star!=null && star<=3) ? 1 : 0;
+        o[cSum] = star!=null ? star : 0;
+        o[cN]   = star!=null ? 1 : 0;
         return o;
       }).filter(o => o[keySrc]!=null && o[keySrc]!=='');
-      entry.headers = [keySrc, cGood, cEx, cBad];
+      entry.headers = [keySrc, cGood, cEx, cBad, cSum, cN];
+      entry.sumCols = [cGood, cEx, cBad, cSum, cN];
       return;
     }
   }
@@ -289,6 +293,7 @@ function transformEntry(entry){
       '推广订单量': (num(r['团购订单量（个）'])||0) + (num(r['下单券数（张）'])||0)
     })).filter(o => o['推广门店']!=null && o['推广门店']!=='');
     entry.headers = ['推广门店','推广花费','推广订单量'];
+    entry.sumCols = ['推广花费','推广订单量'];
     return;
   }
 }
@@ -332,7 +337,8 @@ function aggregateFile(f){
       if(!h || h === f.keyCol) return;
       const vals = rows.map(r=>r[h]).filter(v => v != null && v !== '');
       if(!vals.length){ rec[h] = null; return; }
-      if(vals.length === 1 || vals.every(v => String(v).trim() === String(vals[0]).trim())){ rec[h] = cleanVal(vals[0]); return; }
+      const alwaysSum = (f.sumCols||[]).includes(h);
+      if(!alwaysSum && (vals.length === 1 || vals.every(v => String(v).trim() === String(vals[0]).trim()))){ rec[h] = cleanVal(vals[0]); return; }
       if(isRate(h)){
         const ns = vals.map(num).filter(v=>v!=null);
         rec[h] = ns.length ? +(ns.reduce((a,b)=>a+b,0)/ns.length).toFixed(4) : cleanVal(vals[0]);
@@ -440,7 +446,7 @@ function finalize(){
     derive(o);
     return o;
   });
-  merged = {columns: outCols, rows};
+  merged = {columns: outCols.filter(c=>!/-星级(合计|条数)$/.test(c)), rows};
   renderPreview();
   $('btnSave').disabled = false; $('btnDl').disabled = false;
 }
@@ -458,6 +464,11 @@ function derive(o){
     o['有效好评总数'] = F(o['点评-有效好评'])+F(o['美团-有效好评']);
   if(o['优秀好评总数']==null && (o['点评-优秀好评']!=null || o['美团-优秀好评']!=null))
     o['优秀好评总数'] = F(o['点评-优秀好评'])+F(o['美团-优秀好评']);
+  ['点评','美团'].forEach(p=>{
+    const n = F(o[p+'-星级条数']);
+    if(n>0) put(p+'星级', F(o[p+'-星级合计'])/n);
+    delete o[p+'-星级合计']; delete o[p+'-星级条数'];
+  });
 }
 
 function renderPreview(){
