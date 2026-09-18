@@ -57,6 +57,11 @@ h1{font-size:22px;font-weight:700}
 .stat{display:inline-block;background:var(--primary-soft);color:var(--primary);font-size:12px;font-weight:600;padding:4px 12px;border-radius:999px;margin:0 8px 8px 0}
 .stat.warn{background:#fef3c7;color:#b45309}
 
+.mapgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px;margin-top:10px}
+.maprow{display:flex;align-items:center;gap:8px;font-size:12px;background:#f8faff;border:1px solid var(--border);border-radius:10px;padding:6px 10px}
+.maprow .mk{flex:0 0 96px;font-weight:700;color:var(--primary)}
+.maprow select{flex:1;padding:5px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:#fff;min-width:0}
+
 .tbl-wrap{overflow:auto;max-height:420px;border:1px solid var(--border);border-radius:12px}
 table{border-collapse:collapse;font-size:12px;min-width:100%}
 th{background:#f5f8fd;color:var(--sub);font-weight:600;padding:7px 10px;text-align:left;white-space:nowrap;position:sticky;top:0}
@@ -75,7 +80,7 @@ tr:hover td{background:#f8faff}
     <div class="logo">花</div>
     <div>
       <h1>多源数据导入</h1>
-      <div class="sub">上传多个来源的 Excel，按门店名自动合并成看板数据</div>
+      <div class="sub">上传多个来源的 Excel，按门店名自动聚合并合并成看板数据</div>
     </div>
     <div class="spacer"></div>
     <a class="btn btn-ghost" href="index.html">← 返回数据看板</a>
@@ -98,15 +103,17 @@ tr:hover td{background:#f8faff}
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple style="position:absolute;left:-9999px;top:0">
     <div class="hint" style="margin-top:10px">
-      合并规则：以「门店名」为键做并集合并；<b>后添加的文件覆盖同名指标列</b>（仅覆盖非空值）；不同名的列会全部保留并展示在看板明细中。
-      如果某文件没有「分店名」列，可在下方手动选择门店列；表头不在第一行时可调整表头行号。
+      合并规则：门店名自动归一化（忽略「·」、空格、全半角括号）后按门店聚合；同一文件内一家门店有多行（按日期 / 商品 / 团购券明细）时，
+      数值列<b>自动求和</b>、比率列取平均；<b>后添加的文件覆盖同名指标列</b>。常见导出列名（核销金额→GTV、门店等级→牌级 等）会自动映射，
+      没认出来的列可在第 2 步手动指定。
     </div>
     <div id="fileList" style="margin-top:12px"></div>
   </div>
 
   <div class="panel">
-    <h3><span class="dot" style="background:var(--cyan)"></span>第 2 步 · 合并预览</h3>
+    <h3><span class="dot" style="background:var(--cyan)"></span>第 2 步 · 列映射与合并预览</h3>
     <div id="mergeInfo"><span class="hint">尚未添加文件</span></div>
+    <div id="mapWrap"></div>
     <div class="tbl-wrap" id="previewWrap" style="display:none;margin-top:10px"><table id="previewTbl"></table></div>
   </div>
 
@@ -130,13 +137,53 @@ tr:hover td{background:#f8faff}
 <script>
 const LS_KEY = 'meituanDashboardData';
 const KEY_CANDIDATES = ['分店名','门店名称','门店名','门店','店名','店铺名称','店铺','商户名称'];
-const norm = s => String(s ?? '').trim().replace(/\s+/g,'');
 const $ = id => document.getElementById(id);
-let files = [];   // {id,name,aoa,headerRow,keyCol,headers,rows,error}
-let merged = null; // {columns, rows, stats}
+let files = [];      // {id,name,aoa,headerRow,keyCol,headers,rows,error}
+let rawMerge = null; // 门店聚合后、列映射前
+let merged = null;   // 列映射后，供预览/保存
+let manual = {};     // 看板列名 -> 源列名（手动指定）
+let _autoMap = {};
 let seq = 0;
 
+/* 门店名归一化：去掉间隔号/空格，全角括号转半角 */
+const normName = s => String(s ?? '').trim().replace(/[·\s]/g,'').replace(/（/g,'(').replace(/）/g,')');
+
+/* 看板使用的标准列（用于列映射下拉） */
+const CANON = ['牌级','经营评分','交易表现','美团星级','点评星级','数据部新客数','下单券数','下单人数','核销券数','核销人数',
+  '退款券数','核销率','退款率','GMV','GTV','推广花费','推广曝光次数','推广访客次数','获客成本','推广订单量',
+  '双平台总咨询','在线咨询数','电话数','曝光人数','曝光次数','访问人数','访问次数','曝访转化率','访购率',
+  '新增收藏人数','新增打卡人数','点评-有效好评','美团-有效好评','有效好评总数','优秀好评总数','点评-中差评','美团-中差评',
+  '好评邀约率','责任运营','运营经理','省份','城市','门店类型'];
+/* 源列名 -> 看板列名 的自动别名 */
+const ALIAS = {
+  '门店等级':'牌级','牌级名称':'牌级',
+  '经营评分总分':'经营评分','经营得分':'经营评分',
+  '门店城市':'城市','所在城市':'城市','门店省份':'省份','所在省份':'省份',
+  '核销金额':'GTV','交易金额':'GTV',
+  '下单金额':'GMV','支付金额':'GMV',
+  '曝光访问转化率':'曝访转化率','曝光-访问转化率':'曝访转化率',
+  '推广消耗':'推广花费','消耗':'推广花费','推广消费':'推广花费','花费':'推广花费',
+  '门店星级':'美团星级','美团门店星级':'美团星级','大众点评星级':'点评星级','点评门店星级':'点评星级',
+  '咨询量':'双平台总咨询','总咨询量':'双平台总咨询','咨询人数':'双平台总咨询',
+  '有效好评':'有效好评总数','好评数':'有效好评总数','好评总量':'有效好评总数',
+  '中差评':'点评-中差评','中差评数':'点评-中差评',
+  '新客数':'数据部新客数','新增新客数':'数据部新客数','新客人数':'数据部新客数',
+  '收藏人数':'新增收藏人数','打卡人数':'新增打卡人数'
+};
+/* 比率类列名（多行聚合时取平均而非求和） */
+const isRate = h => /率|占比|转化/.test(h);
+
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2800); }
+
+/* ---------- 数值清洗 ---------- */
+function num(v){
+  if(v == null || v === '') return null;
+  if(typeof v === 'number') return v;
+  const s = String(v).trim().replace(/,/g,'');
+  if(s.endsWith('%')){ const n = parseFloat(s); return isNaN(n) ? null : n/100; }
+  const n = +s; return isNaN(n) ? null : n;
+}
+const F = v => num(v) ?? 0;
 
 /* ---------- file intake ---------- */
 $('drop').addEventListener('click', ()=>$('fileInput').click());
@@ -204,55 +251,151 @@ function setKeyCol(id, v){ const f=files.find(x=>x.id===id); if(f){f.keyCol=v; f
 function setHeaderRow(id, v){ const f=files.find(x=>x.id===id); if(f){f.headerRow=Math.max(1,+v||1); parseEntry(f); renderFiles(); mergeAll();} }
 function removeFile(id){ files = files.filter(x=>x.id!==id); renderFiles(); mergeAll(); }
 
-/* ---------- merge ---------- */
+/* ---------- 单文件内按门店聚合（多行明细 → 一行） ---------- */
+function aggregateFile(f){
+  const groups = new Map();
+  f.rows.forEach(r=>{
+    const k = normName(r[f.keyCol]);
+    if(!k) return;
+    if(!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  });
+  const out = [];
+  groups.forEach((rows, k)=>{
+    const rec = {_key:k, _name:String(rows[0][f.keyCol]).trim()};
+    f.headers.forEach(h=>{
+      if(!h || h === f.keyCol) return;
+      const vals = rows.map(r=>r[h]).filter(v => v != null && v !== '');
+      if(!vals.length){ rec[h] = null; return; }
+      if(vals.length === 1 || vals.every(v => String(v).trim() === String(vals[0]).trim())){ rec[h] = cleanVal(vals[0]); return; }
+      if(isRate(h)){
+        const ns = vals.map(num).filter(v=>v!=null);
+        rec[h] = ns.length ? +(ns.reduce((a,b)=>a+b,0)/ns.length).toFixed(4) : cleanVal(vals[0]);
+      }else{
+        const ns = vals.map(num);
+        rec[h] = ns.every(v=>v!=null) ? +ns.reduce((a,b)=>a+b,0).toFixed(2) : cleanVal(vals[0]);
+      }
+    });
+    out.push(rec);
+  });
+  return out;
+}
+function cleanVal(v){
+  if(typeof v === 'number') return v;
+  if(typeof v === 'string'){ const n = num(v); if(n != null) return n; }
+  return v;
+}
+
+/* ---------- 跨文件合并 ---------- */
 function mergeAll(){
-  merged = null;
+  rawMerge = null; merged = null;
   const ok = files.filter(f=>!f.error && f.keyCol);
   if(!ok.length){
     $('mergeInfo').innerHTML = '<span class="hint">尚未添加可用文件</span>';
-    $('previewWrap').style.display='none';
+    $('mapWrap').innerHTML = ''; $('previewWrap').style.display='none';
     $('btnSave').disabled = true; $('btnDl').disabled = true;
     return;
   }
-  const storeMap = new Map();  // normKey -> {row, sources:Set}
+  const storeMap = new Map();
   const columns = ['分店名'];
-  let overwritten = 0;
+  let aggregated = 0;
   ok.forEach((f, fi)=>{
-    f.rows.forEach(r=>{
-      const key = norm(r[f.keyCol]);
-      if(!key) return;
-      let rec = storeMap.get(key);
-      if(!rec){ rec = {row:{分店名:String(r[f.keyCol]).trim()}, sources:new Set()}; storeMap.set(key, rec); }
-      rec.sources.add(fi);
-      for(const h of f.headers){
-        if(!h || h === f.keyCol) continue;
-        const v = r[h];
-        if(v == null || v === '') continue;
+    const recs = aggregateFile(f);
+    aggregated += f.rows.length - recs.length;
+    recs.forEach(rec=>{
+      let t = storeMap.get(rec._key);
+      if(!t){ t = {分店名:rec._name, _src:new Set()}; storeMap.set(rec._key, t); }
+      t._src.add(fi);
+      f.headers.forEach(h=>{
+        if(!h || h === f.keyCol) return;
+        const v = rec[h];
+        if(v == null || v === '') return;
         if(!columns.includes(h)) columns.push(h);
-        if(rec.row[h] != null && rec.row[h] !== '' && rec.row[h] !== v) overwritten++;
-        rec.row[h] = v;
-      }
+        t[h] = v;
+      });
     });
   });
-  const rows = [...storeMap.values()].map(x=>x.row);
-  const singleSource = [...storeMap.entries()].filter(([,rec])=>rec.sources.size===1 && ok.length>1);
-  merged = {columns, rows};
+  rawMerge = {columns, rows:[...storeMap.values()].map(({_src, ...r})=>r)};
 
-  let info = `<span class="stat">合并后 ${rows.length} 家门店</span><span class="stat">${columns.length} 个指标列</span>`;
-  if(overwritten) info += `<span class="stat">覆盖更新 ${overwritten} 个字段值</span>`;
-  if(singleSource.length && ok.length>1){
-    const names = singleSource.slice(0,12).map(([k,rec])=>rec.row['分店名']).join('、');
-    info += `<div class="hint" style="margin-top:4px;color:var(--amber)">以下 ${singleSource.length} 家门店只出现在单个文件中，如与其他文件是同一家店，请统一门店名后重新上传：${names}${singleSource.length>12?' …':''}</div>`;
-  }
+  initMapping();
+  finalize();
+
+  const single = [...storeMap.values()].filter(r=>r._src.size===1 && ok.length>1);
+  let info = `<span class="stat">合并后 ${rawMerge.rows.length} 家门店</span><span class="stat">${merged.columns.length} 个指标列</span>`;
+  if(aggregated) info += `<span class="stat">明细行已聚合 ${aggregated} 行</span>`;
+  if(single.length) info += `<div class="hint" style="margin-top:4px;color:var(--amber)">以下 ${single.length} 家门店只出现在单个文件中，如与其他文件是同一家店，请统一门店名后重新上传：` +
+    single.slice(0,10).map(r=>r['分店名']).join('、') + (single.length>10?' …':'') + '</div>';
   $('mergeInfo').innerHTML = info;
+}
 
+/* ---------- 列映射 ---------- */
+function initMapping(){
+  const cols = rawMerge.columns;
+  _autoMap = {};
+  CANON.forEach(c=>{
+    if(cols.includes(c)) _autoMap[c] = c;
+    else{
+      const hit = Object.keys(ALIAS).find(k => ALIAS[k]===c && cols.includes(k));
+      if(hit) _autoMap[c] = hit;
+    }
+  });
+  renderMapping();
+}
+function renderMapping(){
+  const cols = rawMerge.columns;
+  const missing = CANON.filter(c => !_autoMap[c] && !manual[c]);
+  const mapped = CANON.filter(c => _autoMap[c] || manual[c]);
+  if(!missing.length && !mapped.length){ $('mapWrap').innerHTML=''; return; }
+  const opts = cols.filter(c=>c!=='分店名').map(c=>`<option value="${c}">${c}</option>`).join('');
+  $('mapWrap').innerHTML =
+    `<div class="hint" style="margin-top:8px">看板指标与源列的对应关系：已自动识别 ${mapped.length} 项；下面这些看板列还没找到来源，如源文件里有对应列请手动指定：</div>` +
+    (missing.length ? '<div class="mapgrid">' + missing.map(c=>
+      `<div class="maprow"><span class="mk">${c}</span><select onchange="setMap('${c}',this.value)"><option value="">— 无对应列 —</option>${opts}</select></div>`).join('') + '</div>' : '');
+}
+function setMap(c, v){ if(v) manual[c]=v; else delete manual[c]; finalize(); renderMapping(); }
+
+/* ---------- 应用映射 + 派生指标 ---------- */
+function finalize(){
+  const eff = {};
+  CANON.forEach(c=>{ eff[c] = manual[c] || _autoMap[c]; });
+  const rev = {};
+  Object.entries(eff).forEach(([c,src])=>{ if(src) rev[src] = c; });
+  const outCols = ['分店名'];
+  const rows = rawMerge.rows.map(r=>{
+    const o = {分店名:r['分店名']};
+    rawMerge.columns.forEach(h=>{
+      if(h === '分店名') return;
+      const t = rev[h];
+      if(t){ if(!outCols.includes(t)) outCols.push(t); o[t] = r[h]; }
+      else { if(!outCols.includes(h)) outCols.push(h); o[h] = r[h]; }
+    });
+    derive(o);
+    return o;
+  });
+  merged = {columns: outCols, rows};
+  renderPreview();
+  $('btnSave').disabled = false; $('btnDl').disabled = false;
+}
+function derive(o){
+  const put = (k,v)=>{ if(v!=null && isFinite(v)) o[k]=+v.toFixed(4); };
+  if(F(o['下单券数'])>0){
+    put('核销率', F(o['核销券数'])/F(o['下单券数']));
+    put('退款率', F(o['退款券数'])/F(o['下单券数']));
+  }
+  if(F(o['曝光人数'])>0) put('曝访转化率', F(o['访问人数'])/F(o['曝光人数']));
+  if(F(o['访问人数'])>0) put('访购率', F(o['下单人数'])/F(o['访问人数']));
+  if(F(o['数据部新客数'])>0 && F(o['推广花费'])>0) put('获客成本', F(o['推广花费'])/F(o['数据部新客数']));
+  if(o['有效好评总数']==null && (o['点评-有效好评']!=null || o['美团-有效好评']!=null))
+    o['有效好评总数'] = F(o['点评-有效好评'])+F(o['美团-有效好评']);
+}
+
+function renderPreview(){
   const maxRows = 50;
   const cell = v => v == null ? '' : (typeof v === 'number' ? (+v.toFixed(4)).toLocaleString() : String(v));
   $('previewTbl').innerHTML =
-    '<thead><tr>' + columns.map(c=>`<th>${c}</th>`).join('') + '</tr></thead>' +
-    '<tbody>' + rows.slice(0,maxRows).map(r=>'<tr>'+columns.map(c=>`<td>${cell(r[c])}</td>`).join('')+'</tr>').join('') + '</tbody>';
+    '<thead><tr>' + merged.columns.map(c=>`<th>${c}</th>`).join('') + '</tr></thead>' +
+    '<tbody>' + merged.rows.slice(0,maxRows).map(r=>'<tr>'+merged.columns.map(c=>`<td>${cell(r[c])}</td>`).join('')+'</tr>').join('') + '</tbody>';
   $('previewWrap').style.display='block';
-  $('btnSave').disabled = false; $('btnDl').disabled = false;
 }
 
 /* ---------- apply / export ---------- */
@@ -260,7 +403,6 @@ function buildPayload(){
   const period = $('periodInput').value.trim() || files.map(f=>f.name.replace(/\.(xlsx|xls|csv)$/i,'')).join(' + ');
   return {period, columns: merged.columns, rows: merged.rows, importedAt: new Date().toISOString(), sources: files.map(f=>f.name)};
 }
-
 function applyData(){
   if(!merged) return;
   try{
@@ -269,7 +411,6 @@ function applyData(){
     setTimeout(()=>location.href='index.html', 600);
   }catch(e){ toast('保存失败：' + e.message); }
 }
-
 function downloadJson(){
   if(!merged) return;
   const blob = new Blob([JSON.stringify(buildPayload())], {type:'application/json'});
